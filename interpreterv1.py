@@ -1,173 +1,142 @@
+# Add to spec:
+# - printing out a nil value is undefined
+
+from env_v1 import EnvironmentManager
+from type_valuev1 import Type, Value, create_value, get_printable
+from intbase import InterpreterBase, ErrorType
 from brewparse import parse_program
-from intbase import ErrorType, InterpreterBase
 
+
+# Main interpreter class
 class Interpreter(InterpreterBase):
+    # constants
+    BIN_OPS = {"+", "-"}
+
+    # methods
     def __init__(self, console_output=True, inp=None, trace_output=False):
-        super().__init__(console_output, inp)   # call InterpreterBase's constructor
-    
-    def interpret_statement(self, statement):
-        if self.trace_output == True:
-            print(statement)
+        super().__init__(console_output, inp)
+        self.trace_output = trace_output
+        self.__setup_ops()
 
-    #main run function
-    def run(self,program):
+    # run a program that's provided in a string
+    # usese the provided Parser found in brewparse.py to parse the program
+    # into an abstract syntax tree (ast)
+    def run(self, program):
         ast = parse_program(program)
-        self.variable_name_to_value = {}
-        main_func_node = ast.dict["functions"][0]
-        if(main_func_node.dict["name"] != "main"):
+        self.__set_up_function_table(ast)
+        main_func = self.__get_func_by_name("main")
+        self.env = EnvironmentManager()
+        self.__run_statements(main_func.get("statements"))
+
+    def __set_up_function_table(self, ast):
+        self.func_name_to_ast = {}
+        for func_def in ast.get("functions"):
+            self.func_name_to_ast[func_def.get("name")] = func_def
+
+    def __get_func_by_name(self, name):
+        if name not in self.func_name_to_ast:
+            super().error(ErrorType.NAME_ERROR, f"Function {name} not found")
+        return self.func_name_to_ast[name]
+
+    def __run_statements(self, statements):
+        # all statements of a function are held in arg3 of the function AST node
+        for statement in statements:
+            if self.trace_output:
+                print(statement)
+            if statement.elem_type == InterpreterBase.FCALL_NODE:
+                self.__call_func(statement)
+            elif statement.elem_type == "=":
+                self.__assign(statement)
+            elif statement.elem_type == InterpreterBase.VAR_DEF_NODE:
+                self.__var_def(statement)
+
+
+    def __call_func(self, call_node):
+        func_name = call_node.get("name")
+        if func_name == "print":
+            return self.__call_print(call_node)
+        if func_name == "inputi":
+            return self.__call_input(call_node)
+
+        # add code here later to call other functions
+        super().error(ErrorType.NAME_ERROR, f"Function {func_name} not found")
+
+    def __call_print(self, call_ast):
+        output = ""
+        for arg in call_ast.get("args"):
+            result = self.__eval_expr(arg)  # result is a Value object
+            output = output + get_printable(result)
+        super().output(output)
+
+    def __call_input(self, call_ast):
+        args = call_ast.get("args")
+        if args is not None and len(args) == 1:
+            result = self.__eval_expr(args[0])
+            super().output(get_printable(result))
+        elif args is not None and len(args) > 1:
             super().error(
-                ErrorType.NAME_ERROR,
-                f"main function has not been defined",
-                )
-        self.run_func(main_func_node)    
+                ErrorType.NAME_ERROR, "No inputi() function that takes > 1 parameter"
+            )
+        inp = super().get_input()
+        if call_ast.get("name") == "inputi":
+            return Value(Type.INT, int(inp))
+        # we can support inputs here later
 
-    def run_func(self,func_node):
-        for statement_node in func_node.dict["statements"]:
-            self.run_statement(statement_node)         
-    
-
-
-    def run_statement(self,statement_node):
-        if(self.is_assignment(statement_node)):
-            self.do_assignment(statement_node)
-        elif(self.is_definition(statement_node)):
-            self.do_definition(statement_node)
-        elif(self.is_func_call(statement_node)):
-            arguments = statement_node.dict["args"]
-            if(statement_node.dict["name"] == "print"):
-                to_be_printed = ""
-                for i in arguments:
-                    if(type(i) == str):
-                        to_be_printed += i
-                    else:
-                        to_be_printed += str(self.evaluate_expression(i))
-                super().output(to_be_printed)
-            elif(statement_node.dict["name"] == "inputi"):
-                if(len(arguments) > 1):
-                    super().error(
-                        ErrorType.NAME_ERROR,
-                        "Inputi does not take more than one more argument"
-                    )
-                elif(len(arguments) == 1):
-                    super().output(str(self.evaluate_expression(arguments[0])))
-                int(super().get_input()) #Does nothing effectively as we don't store input, but it is here
-            else: #unknown function
-                super().error(
-                ErrorType.NAME_ERROR,
-            f"Unknown function call",
+    def __assign(self, assign_ast):
+        var_name = assign_ast.get("name")
+        value_obj = self.__eval_expr(assign_ast.get("expression"))
+        if not self.env.set(var_name, value_obj):
+            super().error(
+                ErrorType.NAME_ERROR, f"Undefined variable {var_name} in assignment"
             )
 
-
-    
-    def do_assignment(self, statement_node):
-        var_name = statement_node.dict["name"] #check to see if the variable we want to assign to is defined
-        if(var_name not in self.variable_name_to_value):
+    def __var_def(self, var_ast):
+        var_name = var_ast.get("name")
+        if not self.env.create(var_name, Value(Type.INT, 0)):
             super().error(
-                ErrorType.NAME_ERROR,
-            f"Variable {var_name} has not been defined",
+                ErrorType.NAME_ERROR, f"Duplicate definition for variable {var_name}"
             )
-        source_node = statement_node.dict["expression"]
-        value = self.evaluate_expression(source_node)
-        self.variable_name_to_value[var_name] = value
-            
-    def evaluate_expression(self,expression_node):
-        if(self.is_value_node(expression_node)):
-            return expression_node.dict["val"]
-        elif(self.is_variable_node(expression_node)):
-            if(expression_node.dict["name"] not in self.variable_name_to_value):
-                super().error(
-                ErrorType.NAME_ERROR,
-                f"Variable {expression_node.dict['name']} has not been defined",
-                )
-            return self.variable_name_to_value[expression_node.dict["name"]] 
-        elif(self.is_is_binary_operator(expression_node)):
-            leftArg = self.evaluate_expression(expression_node.dict["op1"])
-            rightArg = self.evaluate_expression(expression_node.dict["op2"])
-            if(type(leftArg) == str or type(rightArg) == str):
-                super().error(
+
+    def __eval_expr(self, expr_ast):
+        if expr_ast.elem_type == InterpreterBase.INT_NODE:
+            return Value(Type.INT, expr_ast.get("val"))
+        if expr_ast.elem_type == InterpreterBase.STRING_NODE:
+            return Value(Type.STRING, expr_ast.get("val"))
+        if expr_ast.elem_type == InterpreterBase.VAR_NODE:
+            var_name = expr_ast.get("name")
+            val = self.env.get(var_name)
+            if val is None:
+                super().error(ErrorType.NAME_ERROR, f"Variable {var_name} not found")
+            return val
+        if expr_ast.elem_type == InterpreterBase.FCALL_NODE:
+            return self.__call_func(expr_ast)
+        if expr_ast.elem_type in Interpreter.BIN_OPS:
+            return self.__eval_op(expr_ast)
+
+    def __eval_op(self, arith_ast):
+        left_value_obj = self.__eval_expr(arith_ast.get("op1"))
+        right_value_obj = self.__eval_expr(arith_ast.get("op2"))
+        if left_value_obj.type() != right_value_obj.type():
+            super().error(
                 ErrorType.TYPE_ERROR,
-                f"You cannot do binary operations with strings",
-                )
-            if(expression_node.elem_type == "-"): #need to account for nested expressions
-                return leftArg - rightArg
-            else: #else in this case is just +
-                return leftArg + rightArg
-        else: #must be a function call
-            arguments = expression_node.dict["args"]
-            if(expression_node.dict["name"] == "print"): #barista allows you to print to a variable so...
-                to_be_printed = ""
-                for i in arguments:
-                    if(type(i) == str):
-                        to_be_printed += i
-                    else:
-                        to_be_printed += str(self.evaluate_expression(i))
-                super().output(to_be_printed)
-            elif(expression_node.dict["name"] == "inputi"):
-                #must output arguments, check barista if inputi can take more than one argument: Only one argument, allowed to do variables
-                if(len(arguments) > 1):
-                    super().error(
-                        ErrorType.NAME_ERROR,
-                        "Inputi does not take more than one more argument"
-                    )
-                elif(len(arguments) == 1):
-                    super().output(str(self.evaluate_expression(arguments[0])))
-                inputiReturn = int(super().get_input()) #if the user inputs anything not an int, a runtime error will occur(follows Barista behavior)
-                return inputiReturn
-            else:
-                super().error(
-                ErrorType.NAME_ERROR,
-            f"Unknown function call",
+                f"Incompatible types for {arith_ast.elem_type} operation",
             )
-                
-        
-    
-    def is_value_node(self,expression_node):
-        return expression_node.elem_type == "int" or expression_node.elem_type == "string"
-
-    def is_variable_node(self,expression_node):
-        return expression_node.elem_type == "var"
-
-    def is_is_binary_operator(self, expression_node):
-        return expression_node.elem_type == "+" or expression_node.elem_type == "-"
-
-        
-
-    def do_definition(self,statement_node):
-        name = statement_node.dict["name"]
-        if(name in self.variable_name_to_value):
+        if arith_ast.elem_type not in self.op_to_lambda[left_value_obj.type()]:
             super().error(
-                ErrorType.NAME_ERROR,
-                f"Variable {name} defined more than once",
+                ErrorType.TYPE_ERROR,
+                f"Incompatible operator {arith_ast.get_type} for type {left_value_obj.type()}",
             )
-        self.variable_name_to_value[name] = None
+        f = self.op_to_lambda[left_value_obj.type()][arith_ast.elem_type]
+        return f(left_value_obj, right_value_obj)
 
-
-
-    def do_func_call(self, statement_node):
-        pass
-
-    #statement type checkers
-    def is_definition(self,statement_node):
-        try:
-            statement_node.dict["var_type"]
-            return True
-        except:
-            return False
-
-
-    def is_assignment(self,statement_node):
-        try:
-            statement_node.dict["expression"]
-            return True
-        except:
-            return False
-
-    def is_func_call(self,statement_node):
-        try:
-            statement_node.dict["args"]
-            return True
-        except:
-            return False
-
-
-
+    def __setup_ops(self):
+        self.op_to_lambda = {}
+        # set up operations on integers
+        self.op_to_lambda[Type.INT] = {}
+        self.op_to_lambda[Type.INT]["+"] = lambda x, y: Value(
+            x.type(), x.value() + y.value()
+        )
+        self.op_to_lambda[Type.INT]["-"] = lambda x, y: Value(
+            x.type(), x.value() - y.value()
+        )
+        # add other operators here later for int, string, bool, etc

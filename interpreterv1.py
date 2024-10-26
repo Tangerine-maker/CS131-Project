@@ -10,7 +10,7 @@ from brewparse import parse_program
 # Main interpreter class
 class Interpreter(InterpreterBase):
     # constants
-    BIN_OPS = {"+", "-", "*", "/"}
+    BIN_OPS = {"+", "-", "*", "/","==","!=","<=",">=",">","<","||","&&"}
     # methods
     def __init__(self, console_output=True, inp=None, trace_output=False):
         super().__init__(console_output, inp)
@@ -78,7 +78,12 @@ class Interpreter(InterpreterBase):
         output = ""
         for arg in call_ast.get("args"):
             result = self.__eval_expr(arg)  # result is a Value object
-            output = output + get_printable(result)
+            addPrint = get_printable(result)
+            if(type(addPrint) == bool):
+                addPrint = str(addPrint).lower()
+            else:
+                addPrint = str(addPrint)
+            output = output + addPrint
         super().output(output)
 
     def __call_input(self, call_ast):
@@ -122,19 +127,35 @@ class Interpreter(InterpreterBase):
             if val is None:
                 super().error(ErrorType.NAME_ERROR, f"Variable {var_name} not found")
             return val
+        #For booleans
+        if expr_ast.elem_type == InterpreterBase.BOOL_NODE:
+            return Value(Type.BOOL,expr_ast.get("val"))
         if expr_ast.elem_type == Interpreter.NEG_NODE:
             operandValue = self.__eval_expr(expr_ast.dict["op1"])
-            return Value(Type.INT,-1 * operandValue.value())
+            if(operandValue.type() == InterpreterBase.INT_NODE):
+                return Value(Type.INT,-1 * operandValue.value())
+        if expr_ast.elem_type == Interpreter.NOT_NODE:
+            operandValue = self.__eval_expr(expr_ast.dict["op1"])
+            return Value(Type.INT,not operandValue.value())
+        #Function Call
         if expr_ast.elem_type == InterpreterBase.FCALL_NODE:
             return self.__call_func(expr_ast)
+        #Binary Operations
         if expr_ast.elem_type in Interpreter.BIN_OPS:
+            print(self.__eval_op(expr_ast))
             return self.__eval_op(expr_ast)
+
 
     def __eval_op(self, arith_ast):
         left_value_obj = self.__eval_expr(arith_ast.get("op1"))
         right_value_obj = self.__eval_expr(arith_ast.get("op2"))
         print(arith_ast)
         if left_value_obj.type() != right_value_obj.type():
+
+            if(arith_ast.elem_type == "=="):
+                return Value(InterpreterBase.BOOL_NODE,False)
+            elif(arith_ast.elem_type == "!="):
+                return Value(InterpreterBase.BOOL_NODE, True)
             super().error(
                 ErrorType.TYPE_ERROR,
                 f"Incompatible types for {arith_ast.elem_type} operation",
@@ -163,13 +184,58 @@ class Interpreter(InterpreterBase):
         self.op_to_lambda[Type.INT]["/"] = lambda x, y: Value(
             x.type(), x.value() // y.value()
         )
+        self.op_to_lambda[Type.INT]["=="] = lambda x, y: Value(
+            x.type(), x.value() == y.value()
+        )
+        self.op_to_lambda[Type.INT]["!="] = lambda x, y: Value(
+            x.type(), x.value() != y.value()
+        )
+        self.op_to_lambda[Type.INT]["<"] = lambda x, y: Value(
+            x.type(), x.value() < y.value()
+        )
+        self.op_to_lambda[Type.INT]["<="] = lambda x, y: Value(
+            x.type(), x.value() <= y.value()
+        )
+        self.op_to_lambda[Type.INT][">"] = lambda x, y: Value(
+            x.type(), x.value() > y.value()
+        )
+        self.op_to_lambda[Type.INT][">="] = lambda x, y: Value(
+            x.type(), x.value() >= y.value()
+        )
         # add other operators here later for int, string, bool, etc
+        # String operations:
+        self.op_to_lambda[Type.STRING] = {}
+        self.op_to_lambda[Type.STRING]["+"] = lambda x, y: Value(
+            x.type(), x.value() + y.value()
+        )
+        self.op_to_lambda[Type.STRING]["=="] = lambda x, y: Value(
+            x.type(), x.value() == y.value()
+        )
+        self.op_to_lambda[Type.STRING]["!="] = lambda x, y: Value(
+            x.type(), x.value() != y.value()
+        )
+
+        # Bool operations
+        self.op_to_lambda[Type.BOOL] = {}
+        self.op_to_lambda[Type.BOOL]["=="] = lambda x, y: Value(
+            x.type(), x.value() == y.value()
+        )
+        self.op_to_lambda[Type.BOOL]["!="] = lambda x, y: Value(
+            x.type(), x.value() != y.value()
+        )
+        self.op_to_lambda[Type.BOOL]["||"] = lambda x, y: Value(
+            x.type(), x.value() | y.value()
+        )
+        self.op_to_lambda[Type.BOOL]["&&"] = lambda x, y: Value(
+            x.type(), x.value() & y.value()
+        )
+
 
 if (__name__ == "__main__"):
     x = '''
 func main() {
     var x;
-    x = -5+5;
+    x = "ps" != 5;
     print(x);
 }'''
     gh = Interpreter()

@@ -10,8 +10,7 @@ from brewparse import parse_program
 # Main interpreter class
 class Interpreter(InterpreterBase):
     # constants
-    BIN_OPS = {"+", "-"}
-
+    BIN_OPS = {"+", "-", "*", "/"}
     # methods
     def __init__(self, console_output=True, inp=None, trace_output=False):
         super().__init__(console_output, inp)
@@ -49,6 +48,15 @@ class Interpreter(InterpreterBase):
                 self.__assign(statement)
             elif statement.elem_type == InterpreterBase.VAR_DEF_NODE:
                 self.__var_def(statement)
+            elif statement.elem_type == InterpreterBase.IF_NODE:
+                self.__if_statement(statement)
+
+    def __if_statement(self, statement):
+        print(statement)
+        print(statement.dict)
+        print(statement.dict["condition"])
+        print(statement.dict["condition"].dict)
+        print(statement.dict["condition"].elem_type)
 
 
     def __call_func(self, call_node):
@@ -59,6 +67,11 @@ class Interpreter(InterpreterBase):
             return self.__call_input(call_node)
 
         # add code here later to call other functions
+        print(self.func_name_to_ast[func_name])
+        print(self.func_name_to_ast[func_name].dict)
+        if func_name in self.func_name_to_ast:
+            for i in self.func_name_to_ast[func_name]:
+                self.__run_statements(i)
         super().error(ErrorType.NAME_ERROR, f"Function {func_name} not found")
 
     def __call_print(self, call_ast):
@@ -98,6 +111,7 @@ class Interpreter(InterpreterBase):
             )
 
     def __eval_expr(self, expr_ast):
+        print(expr_ast)
         if expr_ast.elem_type == InterpreterBase.INT_NODE:
             return Value(Type.INT, expr_ast.get("val"))
         if expr_ast.elem_type == InterpreterBase.STRING_NODE:
@@ -108,6 +122,9 @@ class Interpreter(InterpreterBase):
             if val is None:
                 super().error(ErrorType.NAME_ERROR, f"Variable {var_name} not found")
             return val
+        if expr_ast.elem_type == Interpreter.NEG_NODE:
+            operandValue = self.__eval_expr(expr_ast.dict["op1"])
+            return Value(Type.INT,-1 * operandValue.value())
         if expr_ast.elem_type == InterpreterBase.FCALL_NODE:
             return self.__call_func(expr_ast)
         if expr_ast.elem_type in Interpreter.BIN_OPS:
@@ -116,6 +133,7 @@ class Interpreter(InterpreterBase):
     def __eval_op(self, arith_ast):
         left_value_obj = self.__eval_expr(arith_ast.get("op1"))
         right_value_obj = self.__eval_expr(arith_ast.get("op2"))
+        print(arith_ast)
         if left_value_obj.type() != right_value_obj.type():
             super().error(
                 ErrorType.TYPE_ERROR,
@@ -139,4 +157,20 @@ class Interpreter(InterpreterBase):
         self.op_to_lambda[Type.INT]["-"] = lambda x, y: Value(
             x.type(), x.value() - y.value()
         )
+        self.op_to_lambda[Type.INT]["*"] = lambda x, y: Value(
+            x.type(), x.value() * y.value()
+        )
+        self.op_to_lambda[Type.INT]["/"] = lambda x, y: Value(
+            x.type(), x.value() // y.value()
+        )
         # add other operators here later for int, string, bool, etc
+
+if (__name__ == "__main__"):
+    x = '''
+func main() {
+    var x;
+    x = -5+5;
+    print(x);
+}'''
+    gh = Interpreter()
+    gh.run(x)

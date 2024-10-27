@@ -39,7 +39,7 @@ class Interpreter(InterpreterBase):
 
     def __run_statements(self, statements):
         # all statements of a function are held in arg3 of the function AST node
-        print(statements)
+        #print(statements)
         for statement in statements:
             print(statement)
             if self.trace_output:
@@ -70,7 +70,17 @@ class Interpreter(InterpreterBase):
             pass
 
     def __for_statement(self, statement):
-        pass
+        self.__assign(statement.dict["init"])
+        condition = self.__eval_expr(statement.dict["condition"]).value()
+        while(condition):
+            self.env.append((EnvironmentManager(),True)) #new environment everytime 
+            self.__run_statements(statement.dict["statements"])
+            self.env.pop()
+            self.__assign(statement.dict["update"])
+            condition = self.__eval_expr(statement.dict["condition"]).value()
+
+
+        
 
     def __call_func(self, call_node):
         func_name = call_node.get("name")
@@ -124,7 +134,7 @@ class Interpreter(InterpreterBase):
         value_obj = self.__eval_expr(assign_ast.get("expression"))
         currentScope = self.env[-1]
         currentIndex = len(self.env) - 1
-        while(currentScope[1] == True and currentScope[0].get(var_name) is None):
+        while(currentScope[1] == True and currentScope[0].get(var_name) is None and currentIndex > 0):
             currentIndex -= 1
             currentScope = self.env[currentIndex]
         if not currentScope[0].set(var_name, value_obj):
@@ -140,6 +150,8 @@ class Interpreter(InterpreterBase):
             )
 
     def __eval_expr(self, expr_ast):
+        if expr_ast.elem_type == InterpreterBase.NIL_NODE:
+            return Value(InterpreterBase.NIL_NODE, InterpreterBase.NIL_DEF)
         if expr_ast.elem_type == InterpreterBase.INT_NODE:
             return Value(Type.INT, expr_ast.get("val"))
         if expr_ast.elem_type == InterpreterBase.STRING_NODE:
@@ -256,15 +268,28 @@ class Interpreter(InterpreterBase):
             x.type(), x.value() & y.value()
         )
 
+        #Nil Operations
+        self.op_to_lambda[InterpreterBase.NIL_NODE] = {}
+        self.op_to_lambda[InterpreterBase.NIL_NODE]["=="] = lambda x, y: Value(
+            Type.BOOL, x.type() == y.type()
+        )
+        self.op_to_lambda[InterpreterBase.NIL_NODE]["!="] = lambda x, y: Value(
+            Type.BOOL, x.type() != y.type()
+        )
+
 
 if (__name__ == "__main__"):
     x = '''
-func main() {
-    var i;
-    for (i=0; i+3 < 5; i=i+1) {
-        print(i);
-    }
+func bar(a) {
+  print(a);
 }
+
+func main() {
+  bar(5);
+  bar("hi");
+  bar(false || true);
+}
+
 '''
     gh = Interpreter()
     gh.run(x)

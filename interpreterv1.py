@@ -24,7 +24,7 @@ class Interpreter(InterpreterBase):
         ast = parse_program(program)
         self.__set_up_function_table(ast)
         main_func = self.__get_func_by_name("main")
-        self.env = EnvironmentManager()
+        self.env = [(EnvironmentManager(),False)] #make into a stack, tuple with first being the scope, second boolean representing weather its allowed to go past that scope or not
         self.__run_statements(main_func.get("statements"))
 
     def __set_up_function_table(self, ast):
@@ -39,7 +39,9 @@ class Interpreter(InterpreterBase):
 
     def __run_statements(self, statements):
         # all statements of a function are held in arg3 of the function AST node
+        print(statements)
         for statement in statements:
+            print(statement)
             if self.trace_output:
                 print(statement)
             if statement.elem_type == InterpreterBase.FCALL_NODE:
@@ -50,14 +52,25 @@ class Interpreter(InterpreterBase):
                 self.__var_def(statement)
             elif statement.elem_type == InterpreterBase.IF_NODE:
                 self.__if_statement(statement)
+            elif statement.elem_type == InterpreterBase.FOR_NODE:
+                self.__for_statement(statement)
 
     def __if_statement(self, statement):
-        print(statement)
-        print(statement.dict)
-        print(statement.dict["condition"])
-        print(statement.dict["condition"].dict)
-        print(statement.dict["condition"].elem_type)
+        condition = self.__eval_expr(statement.dict["condition"])
+        if(condition.value() == True):
+            self.env.append((EnvironmentManager(),True)) #add another scope to our local environment
+            self.__run_statements(statement.dict["statements"])
+            self.env.pop()
+        elif(condition.value() == False):
+            self.env.append((EnvironmentManager(),True))
+            self.__run_statements(statement.dict["else_statements"])
+            self.env.pop()
+        else:
+            #throw error
+            pass
 
+    def __for_statement(self, statement):
+        pass
 
     def __call_func(self, call_node):
         func_name = call_node.get("name")
@@ -65,10 +78,12 @@ class Interpreter(InterpreterBase):
             return self.__call_print(call_node)
         if func_name == "inputi":
             return self.__call_input(call_node)
+        if func_name == "inputs":
+            return self.__call_input(call_node)
+        else:
+            self.__run_statements()
 
         # add code here later to call other functions
-        print(self.func_name_to_ast[func_name])
-        print(self.func_name_to_ast[func_name].dict)
         if func_name in self.func_name_to_ast:
             for i in self.func_name_to_ast[func_name]:
                 self.__run_statements(i)
@@ -85,6 +100,8 @@ class Interpreter(InterpreterBase):
                 addPrint = str(addPrint)
             output = output + addPrint
         super().output(output)
+        return InterpreterBase.NIL_DEF
+
 
     def __call_input(self, call_ast):
         args = call_ast.get("args")
@@ -99,31 +116,42 @@ class Interpreter(InterpreterBase):
         if call_ast.get("name") == "inputi":
             return Value(Type.INT, int(inp))
         # we can support inputs here later
+        if call_ast.get("name") == "inputs":
+            return Value(Type.STRING,str(inp))
 
     def __assign(self, assign_ast):
         var_name = assign_ast.get("name")
         value_obj = self.__eval_expr(assign_ast.get("expression"))
-        if not self.env.set(var_name, value_obj):
+        currentScope = self.env[-1]
+        currentIndex = len(self.env) - 1
+        while(currentScope[1] == True and currentScope[0].get(var_name) is None):
+            currentIndex -= 1
+            currentScope = self.env[currentIndex]
+        if not currentScope[0].set(var_name, value_obj):
             super().error(
                 ErrorType.NAME_ERROR, f"Undefined variable {var_name} in assignment"
             )
 
     def __var_def(self, var_ast):
         var_name = var_ast.get("name")
-        if not self.env.create(var_name, Value(Type.INT, 0)):
+        if not self.env[len(self.env)-1][0].create(var_name, Value(Type.INT, 0)):
             super().error(
                 ErrorType.NAME_ERROR, f"Duplicate definition for variable {var_name}"
             )
 
     def __eval_expr(self, expr_ast):
-        print(expr_ast)
         if expr_ast.elem_type == InterpreterBase.INT_NODE:
             return Value(Type.INT, expr_ast.get("val"))
         if expr_ast.elem_type == InterpreterBase.STRING_NODE:
             return Value(Type.STRING, expr_ast.get("val"))
         if expr_ast.elem_type == InterpreterBase.VAR_NODE:
             var_name = expr_ast.get("name")
-            val = self.env.get(var_name)
+            val = None
+            for i in range(len(self.env)-1,-1,-1):
+                currentScope = self.env[i]
+                val = currentScope[0].get(var_name)
+                if(currentScope[1] == False or not (val is None)):
+                    break
             if val is None:
                 super().error(ErrorType.NAME_ERROR, f"Variable {var_name} not found")
             return val
@@ -142,14 +170,12 @@ class Interpreter(InterpreterBase):
             return self.__call_func(expr_ast)
         #Binary Operations
         if expr_ast.elem_type in Interpreter.BIN_OPS:
-            print(self.__eval_op(expr_ast))
             return self.__eval_op(expr_ast)
 
 
     def __eval_op(self, arith_ast):
         left_value_obj = self.__eval_expr(arith_ast.get("op1"))
         right_value_obj = self.__eval_expr(arith_ast.get("op2"))
-        print(arith_ast)
         if left_value_obj.type() != right_value_obj.type():
 
             if(arith_ast.elem_type == "=="):
@@ -185,22 +211,22 @@ class Interpreter(InterpreterBase):
             x.type(), x.value() // y.value()
         )
         self.op_to_lambda[Type.INT]["=="] = lambda x, y: Value(
-            x.type(), x.value() == y.value()
+            InterpreterBase.BOOL_NODE, x.value() == y.value()
         )
         self.op_to_lambda[Type.INT]["!="] = lambda x, y: Value(
-            x.type(), x.value() != y.value()
+            InterpreterBase.BOOL_NODE, x.value() != y.value()
         )
         self.op_to_lambda[Type.INT]["<"] = lambda x, y: Value(
-            x.type(), x.value() < y.value()
+            InterpreterBase.BOOL_NODE, x.value() < y.value()
         )
         self.op_to_lambda[Type.INT]["<="] = lambda x, y: Value(
-            x.type(), x.value() <= y.value()
+            InterpreterBase.BOOL_NODE, x.value() <= y.value()
         )
         self.op_to_lambda[Type.INT][">"] = lambda x, y: Value(
-            x.type(), x.value() > y.value()
+            InterpreterBase.BOOL_NODE, x.value() > y.value()
         )
         self.op_to_lambda[Type.INT][">="] = lambda x, y: Value(
-            x.type(), x.value() >= y.value()
+            InterpreterBase.BOOL_NODE, x.value() >= y.value()
         )
         # add other operators here later for int, string, bool, etc
         # String operations:
@@ -209,10 +235,10 @@ class Interpreter(InterpreterBase):
             x.type(), x.value() + y.value()
         )
         self.op_to_lambda[Type.STRING]["=="] = lambda x, y: Value(
-            x.type(), x.value() == y.value()
+            InterpreterBase.BOOL_NODE, x.value() == y.value()
         )
         self.op_to_lambda[Type.STRING]["!="] = lambda x, y: Value(
-            x.type(), x.value() != y.value()
+            InterpreterBase.BOOL_NODE, x.value() != y.value()
         )
 
         # Bool operations
@@ -234,9 +260,11 @@ class Interpreter(InterpreterBase):
 if (__name__ == "__main__"):
     x = '''
 func main() {
-    var x;
-    x = "ps" != 5;
-    print(x);
-}'''
+    var i;
+    for (i=0; i+3 < 5; i=i+1) {
+        print(i);
+    }
+}
+'''
     gh = Interpreter()
     gh.run(x)

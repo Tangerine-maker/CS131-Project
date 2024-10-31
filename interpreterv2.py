@@ -6,7 +6,6 @@ from type_valuev1 import Type, Value, create_value, get_printable
 from intbase import InterpreterBase, ErrorType
 from brewparse import parse_program
 
-
 # Main interpreter class
 class Interpreter(InterpreterBase):
     # constants
@@ -30,7 +29,11 @@ class Interpreter(InterpreterBase):
     def __set_up_function_table(self, ast):
         self.func_name_to_ast = {}
         for func_def in ast.get("functions"):
-            self.func_name_to_ast[func_def.get("name")] = func_def
+            if(func_def.get("name") == "main"):
+                self.func_name_to_ast[func_def.get("name")] = func_def #naming scheme exception for main
+                continue
+            num_args = len(func_def.dict["args"]) #To allow overloading we will have the name of function+(num of args)
+            self.func_name_to_ast[func_def.get("name") + "+" + str(num_args)] = func_def
 
     def __get_func_by_name(self, name):
         if name not in self.func_name_to_ast:
@@ -41,7 +44,6 @@ class Interpreter(InterpreterBase):
         # all statements of a function are held in arg3 of the function AST node
         #print(statements)
         for statement in statements:
-            print(statement)
             if self.trace_output:
                 print(statement)
             if statement.elem_type == InterpreterBase.FCALL_NODE:
@@ -54,6 +56,11 @@ class Interpreter(InterpreterBase):
                 self.__if_statement(statement)
             elif statement.elem_type == InterpreterBase.FOR_NODE:
                 self.__for_statement(statement)
+            elif statement.elem_type == InterpreterBase.RETURN_NODE:
+                returnVal = self.__eval_expr(statement.dict["expression"])
+                #set our current environment's return value to what returnVal is
+                self.env[-1][0].set("return",returnVal)
+                break #after a return we end program execution
 
     def __if_statement(self, statement):
         condition = self.__eval_expr(statement.dict["condition"])
@@ -90,14 +97,28 @@ class Interpreter(InterpreterBase):
             return self.__call_input(call_node)
         if func_name == "inputs":
             return self.__call_input(call_node)
-        else:
-            self.__run_statements()
 
         # add code here later to call other functions
+        arguments = call_node.dict["args"]
+        func_name = func_name + "+" + str(len(arguments)) #using our naming scheme for custom function
         if func_name in self.func_name_to_ast:
-            for i in self.func_name_to_ast[func_name]:
-                self.__run_statements(i)
-        super().error(ErrorType.NAME_ERROR, f"Function {func_name} not found")
+            function_args = self.func_name_to_ast[func_name].dict["args"]
+            self.env.append((EnvironmentManager(),False)) #cannot go out of scope with the function
+            #define the passed in arguments for our scope
+            for i in range(len(function_args)):
+                self.__var_def(function_args[i])
+                #define newly created argument
+                var_name = function_args[i].dict["name"]
+                value_obj = self.__eval_expr(arguments[i])
+                self.env[-1][0].set(var_name,value_obj)
+            #set our default return value to be nil
+            self.env[len(self.env)-1][0].create("return", Value(InterpreterBase.NIL_DEF, InterpreterBase.NIL_DEF))
+            self.__run_statements(self.func_name_to_ast[func_name].dict["statements"])
+            returnValue = self.env[-1][0].get("return")
+            self.env.pop()
+        else:
+            super().error(ErrorType.NAME_ERROR, f"Function not found")
+        return returnValue
 
     def __call_print(self, call_ast):
         output = ""
@@ -278,18 +299,4 @@ class Interpreter(InterpreterBase):
         )
 
 
-if (__name__ == "__main__"):
-    x = '''
-func bar(a) {
-  print(a);
-}
 
-func main() {
-  bar(5);
-  bar("hi");
-  bar(false || true);
-}
-
-'''
-    gh = Interpreter()
-    gh.run(x)

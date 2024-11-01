@@ -24,6 +24,7 @@ class Interpreter(InterpreterBase):
         self.__set_up_function_table(ast)
         main_func = self.__get_func_by_name("main")
         self.env = [(EnvironmentManager(),False)] #make into a stack, tuple with first being the scope, second boolean representing weather its allowed to go past that scope or not
+        self.env[-1][0].create("return", Value(InterpreterBase.NIL_DEF, InterpreterBase.NIL_DEF))
         self.__run_statements(main_func.get("statements"))
 
     def __set_up_function_table(self, ast):
@@ -40,13 +41,16 @@ class Interpreter(InterpreterBase):
             super().error(ErrorType.NAME_ERROR, f"Function {name} not found")
         return self.func_name_to_ast[name]
 
+
     def __run_statements(self, statements):
         # all statements of a function are held in arg3 of the function AST node
         #print(statements)
         for statement in statements:
             if self.trace_output:
                 print(statement)
-            if statement.elem_type == InterpreterBase.FCALL_NODE:
+            if (self.env[-1][0].get("return") != None and self.env[-1][0].get("return").value() != InterpreterBase.NIL_DEF):
+                break #we have our return statement break out of it
+            elif statement.elem_type == InterpreterBase.FCALL_NODE:
                 self.__call_func(statement)
             elif statement.elem_type == "=":
                 self.__assign(statement)
@@ -57,34 +61,52 @@ class Interpreter(InterpreterBase):
             elif statement.elem_type == InterpreterBase.FOR_NODE:
                 self.__for_statement(statement)
             elif statement.elem_type == InterpreterBase.RETURN_NODE:
-                returnVal = self.__eval_expr(statement.dict["expression"])
+                if(statement.dict["expression"] != None):
+                    returnVal = self.__eval_expr(statement.dict["expression"])
+                else:
+                    returnVal = Value(InterpreterBase.NIL_NODE, "RETURNED") #alternate value for nil that means to return
                 #set our current environment's return value to what returnVal is
-                self.env[-1][0].set("return",returnVal)
+                currentScope = self.env[-1]
+                currentIndex = len(self.env) - 1
+                while(currentScope[1] == True): #search to find our largest scope where our return is
+                    currentIndex -= 1
+                    currentScope[0].set("return",returnVal) # keep going back until we hit our last known scope setting our return values accordingly
+                    currentScope = self.env[currentIndex] # they might call return in main(), account for this if test case
+                currentScope[0].set("return",returnVal) #reached back to our current main scope
                 break #after a return we end program execution
 
     def __if_statement(self, statement):
         condition = self.__eval_expr(statement.dict["condition"])
         if(condition.value() == True):
             self.env.append((EnvironmentManager(),True)) #add another scope to our local environment
+            current_return_val = self.env[-2][0].get("return")
+            self.env[-1][0].create("return", Value(current_return_val.type(),current_return_val.value())) 
             self.__run_statements(statement.dict["statements"])
             self.env.pop()
         elif(condition.value() == False):
-            self.env.append((EnvironmentManager(),True))
-            self.__run_statements(statement.dict["else_statements"])
-            self.env.pop()
+            if(not (statement.dict["else_statements"] is None)): #only run if we actually have else statements
+                self.env.append((EnvironmentManager(),True))
+                current_return_val = self.env[-2][0].get("return")
+                self.env[-1][0].create("return", Value(current_return_val.type(),current_return_val.value())) 
+                self.__run_statements(statement.dict["else_statements"])
+                self.env.pop()
         else:
-            #throw error
-            pass
+            #throw error as value is not a boolean
+            super().error(ErrorType.TYPE_ERROR, f"Invalid IF condition")
 
     def __for_statement(self, statement):
         self.__assign(statement.dict["init"])
-        condition = self.__eval_expr(statement.dict["condition"]).value()
-        while(condition):
-            self.env.append((EnvironmentManager(),True)) #new environment everytime 
+        condition = self.__eval_expr(statement.dict["condition"]) #removed .value() from end of this, might cause issue left here for reminder
+        if(condition.type() != InterpreterBase.BOOL_NODE):
+            super().error(ErrorType.TYPE_ERROR, f"Invalid For loop condition")
+        while(condition.value()):
+            self.env.append((EnvironmentManager(),True)) #new environment everytime
+            current_return_val = self.env[-2][0].get("return")
+            self.env[-1][0].create("return", Value(current_return_val.type(),current_return_val.value()))  
             self.__run_statements(statement.dict["statements"])
             self.env.pop()
             self.__assign(statement.dict["update"])
-            condition = self.__eval_expr(statement.dict["condition"]).value()
+            condition = self.__eval_expr(statement.dict["condition"])
 
 
         
@@ -103,16 +125,18 @@ class Interpreter(InterpreterBase):
         func_name = func_name + "+" + str(len(arguments)) #using our naming scheme for custom function
         if func_name in self.func_name_to_ast:
             function_args = self.func_name_to_ast[func_name].dict["args"]
-            self.env.append((EnvironmentManager(),False)) #cannot go out of scope with the function
+            function_scope = EnvironmentManager()
+            #self.env.append((EnvironmentManager(),False)) #cannot go out of scope with the function
             #define the passed in arguments for our scope
             for i in range(len(function_args)):
-                self.__var_def(function_args[i])
                 #define newly created argument
                 var_name = function_args[i].dict["name"]
+                function_scope.create(var_name, Value(Type.INT, 0)) #create our argument
                 value_obj = self.__eval_expr(arguments[i])
-                self.env[-1][0].set(var_name,value_obj)
+                function_scope.set(var_name,value_obj) #set our argument
             #set our default return value to be nil
-            self.env[len(self.env)-1][0].create("return", Value(InterpreterBase.NIL_DEF, InterpreterBase.NIL_DEF))
+            self.env.append((function_scope,False))
+            self.env[-1][0].create("return", Value(InterpreterBase.NIL_DEF, InterpreterBase.NIL_DEF))
             self.__run_statements(self.func_name_to_ast[func_name].dict["statements"])
             returnValue = self.env[-1][0].get("return")
             self.env.pop()
@@ -131,7 +155,7 @@ class Interpreter(InterpreterBase):
                 addPrint = str(addPrint)
             output = output + addPrint
         super().output(output)
-        return InterpreterBase.NIL_DEF
+        return Value(InterpreterBase.NIL_NODE,InterpreterBase.NIL_DEF)
 
 
     def __call_input(self, call_ast):
@@ -195,9 +219,13 @@ class Interpreter(InterpreterBase):
             operandValue = self.__eval_expr(expr_ast.dict["op1"])
             if(operandValue.type() == InterpreterBase.INT_NODE):
                 return Value(Type.INT,-1 * operandValue.value())
+            else:
+                super().error(ErrorType.TYPE_ERROR, f"Invalid Type with operation")
         if expr_ast.elem_type == Interpreter.NOT_NODE:
             operandValue = self.__eval_expr(expr_ast.dict["op1"])
-            return Value(Type.INT,not operandValue.value())
+            if(operandValue.type() != InterpreterBase.BOOL_NODE):
+                super().error(ErrorType.TYPE_ERROR, f"Invalid Type with operation")
+            return Value(Type.BOOL,not operandValue.value())
         #Function Call
         if expr_ast.elem_type == InterpreterBase.FCALL_NODE:
             return self.__call_func(expr_ast)
@@ -222,7 +250,7 @@ class Interpreter(InterpreterBase):
         if arith_ast.elem_type not in self.op_to_lambda[left_value_obj.type()]:
             super().error(
                 ErrorType.TYPE_ERROR,
-                f"Incompatible operator {arith_ast.get_type} for type {left_value_obj.type()}",
+                f"Incompatible operator {arith_ast.elem_type} for type {left_value_obj.type()}",
             )
         f = self.op_to_lambda[left_value_obj.type()][arith_ast.elem_type]
         return f(left_value_obj, right_value_obj)

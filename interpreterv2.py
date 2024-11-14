@@ -72,7 +72,6 @@ class Interpreter(InterpreterBase):
         return candidate_funcs[num_params]
 
     def __run_statements(self, statements):
-        self.env.push_block()
         for statement in statements:
             print(statement)
             if self.trace_output:
@@ -164,6 +163,17 @@ class Interpreter(InterpreterBase):
         var_name = assign_ast.get("name")
         value_obj = self.__eval_expr(assign_ast.get("expression"))
         value_type = value_obj.type()
+        if("." in var_name): # If dot operator is used
+            object_name, field_name = var_name.split('.')
+            struct_type = self.env.get(object_name).type()
+            val = self.env.get(object_name).value()
+            val[field_name] = value_obj
+            print(object_name)
+            print(struct_type)
+            print()
+            value_obj = Value(struct_type,val)
+            value_type = value_obj.type()
+            var_name = object_name
         set_status = self.env.set(var_name, value_obj,value_type)
         if(set_status == "FAIL"):
             super().error(
@@ -173,19 +183,26 @@ class Interpreter(InterpreterBase):
             super().error(
                 ErrorType.TYPE_ERROR, f"Incompatible type assignment"
             )
+        print(self.env.environment)
     
+    def __get_default(self,var_type):
+        match var_type:
+            case InterpreterBase.INT_NODE:
+                return Value(InterpreterBase.INT_NODE,0)
+            case InterpreterBase.STRING_NODE:
+                return Value(InterpreterBase.STRING_NODE,"")
+            case InterpreterBase.BOOL_NODE:
+                return Value(InterpreterBase.BOOL_NODE,False)
+            case other: # Will eventually be used for structs
+                if(other in self.struct_table):
+                    return Value(var_type,InterpreterBase.NIL_DEF)
+                else:
+                    pass # Throw error as type does not exist
+
     def __var_def(self, var_ast):
         var_name = var_ast.get("name")
         var_type = var_ast.get("var_type")
-        match var_type:
-            case InterpreterBase.INT_NODE:
-                default_value = 0
-            case InterpreterBase.STRING_NODE:
-                default_value = ""
-            case InterpreterBase.BOOL_NODE:
-                default_value = False
-            case _: # Will eventually be used for structs
-                default_value = InterpreterBase.NIL_DEF
+        default_value = self.__get_default(var_type)
         if not self.env.create(var_name, default_value,var_type):
             super().error(
                 ErrorType.NAME_ERROR, f"Duplicate definition for variable {var_name}"
@@ -206,6 +223,12 @@ class Interpreter(InterpreterBase):
             if val is None:
                 super().error(ErrorType.NAME_ERROR, f"Variable {var_name} not found")
             return val
+        if expr_ast.elem_type == InterpreterBase.NEW_NODE:
+            found_struct = self.struct_table[expr_ast.get("var_type")]
+            default_vals = {}
+            for field in found_struct:
+                default_vals[field] = self.__get_default(found_struct[field]) # Get default value for each field of the struct
+            return Value(expr_ast.get("var_type"),default_vals)
         if expr_ast.elem_type == InterpreterBase.FCALL_NODE:
             return self.__call_func(expr_ast)
         if expr_ast.elem_type in Interpreter.BIN_OPS:
@@ -378,7 +401,9 @@ struct dog {
   vaccinated: bool;  
 }
    func main() {
-       var x: a;
+        var x: dog;
+        x = new dog;
+        x.name = "Koda";
    }'''
 gc = Interpreter()
 gc.run(x)

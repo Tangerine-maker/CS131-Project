@@ -15,6 +15,7 @@ class EnvironmentManager:
         return None
 
     def set(self, symbol, value, type):
+        print(type)
         cur_func_env = self.environment[-1]
         for env in reversed(cur_func_env):
             if symbol in env:
@@ -24,7 +25,6 @@ class EnvironmentManager:
                 return "SUCCESS"
 
         return "FAIL"
-
     # create a new symbol in the top-most environment, regardless of whether that symbol exists
     # in a lower environment
     def create(self, symbol, value, type):

@@ -1,5 +1,6 @@
 # The EnvironmentManager class keeps a mapping between each variable name (aka symbol)
 # in a brewin program and the Value object, which stores a type, and a value.
+import intbase
 class EnvironmentManager:
     def __init__(self):
         self.environment = []
@@ -9,26 +10,28 @@ class EnvironmentManager:
         cur_func_env = self.environment[-1]
         for env in reversed(cur_func_env):
             if symbol in env:
-                return env[symbol]
+                return env[symbol][1]
 
         return None
 
-    def set(self, symbol, value):
+    def set(self, symbol, value, type):
         cur_func_env = self.environment[-1]
         for env in reversed(cur_func_env):
             if symbol in env:
-                env[symbol] = value
-                return True
+                if(type != env[symbol][0]):
+                    return "INV"
+                env[symbol][1] = value
+                return "SUCCESS"
 
-        return False
+        return "FAIL"
 
     # create a new symbol in the top-most environment, regardless of whether that symbol exists
     # in a lower environment
-    def create(self, symbol, value):
+    def create(self, symbol, value, type):
         cur_func_env = self.environment[-1]
         if symbol in cur_func_env[-1]:   # symbol already defined in current scope
             return False
-        cur_func_env[-1][symbol] = value
+        cur_func_env[-1][symbol] = [type,value] # Store a list of the type of the variable followed by the value
         return True
 
     # used when we enter a new function - start with empty dictionary to hold parameters.

@@ -32,9 +32,24 @@ class Interpreter(InterpreterBase):
     # into an abstract syntax tree (ast)
     def run(self, program):
         ast = parse_program(program)
+        self.__set_up_struct_table(ast)
+        print(self.struct_table)
         self.__set_up_function_table(ast)
         self.env = EnvironmentManager()
         self.__call_func_aux("main", [])
+
+    def __set_up_struct_table(self,ast):
+        self.struct_table = {} # Will basically be a dictionary of dictionaries with each struct name corresponding to a dictionary with their field names
+        for struct in ast.get("structs"):
+            if(struct.get("name") in self.struct_table): # Barista doesn't allow duplicte definition of struct
+                pass # throw type error
+            self.struct_table[struct.get("name")] = {}
+            current_struct = self.struct_table[struct.get("name")]
+            for field in struct.get("fields"):
+                if(field.get("var_type") not in self.struct_table 
+                    and field.get("var_type") not in [InterpreterBase.INT_NODE,InterpreterBase.STRING_NODE, InterpreterBase.BOOL_NODE]):
+                        pass # throw type error as field name does not exist
+                current_struct[field.get("name")] = field.get("var_type")
 
     def __set_up_function_table(self, ast):
         self.func_name_to_ast = {}
@@ -59,6 +74,7 @@ class Interpreter(InterpreterBase):
     def __run_statements(self, statements):
         self.env.push_block()
         for statement in statements:
+            print(statement)
             if self.trace_output:
                 print(statement)
             status, return_val = self.__run_statement(statement)
@@ -147,14 +163,30 @@ class Interpreter(InterpreterBase):
     def __assign(self, assign_ast):
         var_name = assign_ast.get("name")
         value_obj = self.__eval_expr(assign_ast.get("expression"))
-        if not self.env.set(var_name, value_obj):
+        value_type = value_obj.type()
+        set_status = self.env.set(var_name, value_obj,value_type)
+        if(set_status == "FAIL"):
             super().error(
                 ErrorType.NAME_ERROR, f"Undefined variable {var_name} in assignment"
+            )
+        elif(set_status == "INV"):
+            super().error(
+                ErrorType.TYPE_ERROR, f"Incompatible type assignment"
             )
     
     def __var_def(self, var_ast):
         var_name = var_ast.get("name")
-        if not self.env.create(var_name, Interpreter.NIL_VALUE):
+        var_type = var_ast.get("var_type")
+        match var_type:
+            case InterpreterBase.INT_NODE:
+                default_value = 0
+            case InterpreterBase.STRING_NODE:
+                default_value = ""
+            case InterpreterBase.BOOL_NODE:
+                default_value = False
+            case _: # Will eventually be used for structs
+                default_value = InterpreterBase.NIL_DEF
+        if not self.env.create(var_name, default_value,var_type):
             super().error(
                 ErrorType.NAME_ERROR, f"Duplicate definition for variable {var_name}"
             )
@@ -335,3 +367,18 @@ class Interpreter(InterpreterBase):
         value_obj = copy.copy(self.__eval_expr(expr_ast))
         return (ExecStatus.RETURN, value_obj)
 
+if (__name__ == "__main__"):
+    x = '''
+    struct flea {
+  age: int;
+  infected : bool;
+}
+struct dog {
+  name: string;
+  vaccinated: bool;  
+}
+   func main() {
+       var x: a;
+   }'''
+gc = Interpreter()
+gc.run(x)

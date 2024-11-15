@@ -33,8 +33,9 @@ class Interpreter(InterpreterBase):
     def run(self, program):
         ast = parse_program(program)
         self.__set_up_struct_table(ast)
-        print(self.struct_table)
         self.__set_up_function_table(ast)
+        print(self.func_name_to_ast["foo"])
+        print(self.func_name_to_ast["foo"][1])
         self.env = EnvironmentManager()
         self.__call_func_aux("main", [])
 
@@ -73,7 +74,6 @@ class Interpreter(InterpreterBase):
 
     def __run_statements(self, statements):
         for statement in statements:
-            print(statement)
             if self.trace_output:
                 print(statement)
             status, return_val = self.__run_statement(statement)
@@ -124,7 +124,11 @@ class Interpreter(InterpreterBase):
         # first evaluate all of the actual parameters and associate them with the formal parameter names
         args = {}
         for formal_ast, actual_ast in zip(formal_args, actual_args):
+            print(formal_ast)
+            print(actual_ast)
             result = copy.copy(self.__eval_expr(actual_ast))
+            if(formal_ast.get("var_type") != result.type()):
+                pass # Throw error type mismatch for parameters
             arg_name = formal_ast.get("name")
             args[arg_name] = result
 
@@ -132,8 +136,15 @@ class Interpreter(InterpreterBase):
         self.env.push_func()
         # and add the formal arguments to the activation record
         for arg_name, value in args.items():
-          self.env.create(arg_name, value)
-        _, return_val = self.__run_statements(func_ast.get("statements"))
+          self.env.create(arg_name, value,value.type())
+        return_status, return_val = self.__run_statements(func_ast.get("statements"))
+        # TODO: Implement void logic (just check whether if return_val is literally anything)
+        if(return_status == ExecStatus.CONTINUE):
+            # Return default values
+            print(func_ast)
+            return_val = self.__get_default(func_ast.get("return_type"))
+            print(return_val)
+        print(return_val)
         self.env.pop_func()
         return return_val
 
@@ -141,6 +152,7 @@ class Interpreter(InterpreterBase):
         output = ""
         for arg in args:
             result = self.__eval_expr(arg)  # result is a Value object
+            print(result)
             output = output + get_printable(result)
         super().output(output)
         return Interpreter.NIL_VALUE
@@ -168,9 +180,6 @@ class Interpreter(InterpreterBase):
             struct_type = self.env.get(object_name).type()
             val = self.env.get(object_name).value()
             val[field_name] = value_obj
-            print(object_name)
-            print(struct_type)
-            print()
             value_obj = Value(struct_type,val)
             value_type = value_obj.type()
             var_name = object_name
@@ -183,7 +192,6 @@ class Interpreter(InterpreterBase):
             super().error(
                 ErrorType.TYPE_ERROR, f"Incompatible type assignment"
             )
-        print(self.env.environment)
     
     def __get_default(self,var_type):
         match var_type:
@@ -219,7 +227,11 @@ class Interpreter(InterpreterBase):
             return Value(Type.BOOL, expr_ast.get("val"))
         if expr_ast.elem_type == InterpreterBase.VAR_NODE:
             var_name = expr_ast.get("name")
-            val = self.env.get(var_name)
+            if("." in var_name): # If dot operator is used so structs
+                object_name, field_name = var_name.split('.')
+                val = self.env.get(object_name).value()[field_name]
+            else:
+                val = self.env.get(var_name)
             if val is None:
                 super().error(ErrorType.NAME_ERROR, f"Variable {var_name} not found")
             return val
@@ -400,10 +412,11 @@ struct dog {
   name: string;
   vaccinated: bool;  
 }
+func foo(a:string) : string {
+  var x:int;
+}
    func main() {
-        var x: dog;
-        x = new dog;
-        x.name = "Koda";
+        print(nil);
    }'''
 gc = Interpreter()
 gc.run(x)

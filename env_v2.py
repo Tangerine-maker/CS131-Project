@@ -15,7 +15,6 @@ class EnvironmentManager:
         return None
 
     def set(self, symbol, value, type):
-        print(type)
         cur_func_env = self.environment[-1]
         for env in reversed(cur_func_env):
             if symbol in env:

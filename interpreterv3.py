@@ -12,6 +12,7 @@ from type_valuev2 import Type, Value, create_value, get_printable
 class ExecStatus(Enum):
     CONTINUE = 1
     RETURN = 2
+    ALONE = 3
 
 
 # Main interpreter class
@@ -34,8 +35,6 @@ class Interpreter(InterpreterBase):
         ast = parse_program(program)
         self.__set_up_struct_table(ast)
         self.__set_up_function_table(ast)
-        print(self.func_name_to_ast["foo"])
-        print(self.func_name_to_ast["foo"][1])
         self.env = EnvironmentManager()
         self.__call_func_aux("main", [])
 
@@ -43,14 +42,30 @@ class Interpreter(InterpreterBase):
         self.struct_table = {} # Will basically be a dictionary of dictionaries with each struct name corresponding to a dictionary with their field names
         for struct in ast.get("structs"):
             if(struct.get("name") in self.struct_table): # Barista doesn't allow duplicte definition of struct
-                pass # throw type error
+                super().error(
+                    ErrorType.TYPE_ERROR, "Duplicate Definition of Struct"
+                )
+                
             self.struct_table[struct.get("name")] = {}
             current_struct = self.struct_table[struct.get("name")]
             for field in struct.get("fields"):
                 if(field.get("var_type") not in self.struct_table 
                     and field.get("var_type") not in [InterpreterBase.INT_NODE,InterpreterBase.STRING_NODE, InterpreterBase.BOOL_NODE]):
+                        super().error(
+                            ErrorType.TYPE_ERROR, "Field Does Not Exist"
+                        )
                         pass # throw type error as field name does not exist
                 current_struct[field.get("name")] = field.get("var_type")
+            # Set up == and != for specific struct
+            self.op_to_lambda[struct.get("name")] = {
+                "==": lambda x, y: Value(
+            Type.BOOL, (x.type() == y.type() and x.value() is y.value()) or (y.type() == InterpreterBase.NIL_NODE and x.value() == y.value())
+        ),
+                "!=": lambda x, y: Value(
+            Type.BOOL, not ((x.type() == y.type() and x.value() is y.value()) or (y.type() == InterpreterBase.NIL_NODE and x.value() == y.value()))
+        )
+            }
+
 
     def __set_up_function_table(self, ast):
         self.func_name_to_ast = {}
@@ -73,11 +88,12 @@ class Interpreter(InterpreterBase):
         return candidate_funcs[num_params]
 
     def __run_statements(self, statements):
+        self.env.push_block()
         for statement in statements:
             if self.trace_output:
                 print(statement)
             status, return_val = self.__run_statement(statement)
-            if status == ExecStatus.RETURN:
+            if status == ExecStatus.RETURN or status == ExecStatus.ALONE:
                 self.env.pop_block()
                 return (status, return_val)
 
@@ -99,7 +115,6 @@ class Interpreter(InterpreterBase):
             status, return_val = self.__do_if(statement)
         elif statement.elem_type == Interpreter.FOR_NODE:
             status, return_val = self.__do_for(statement)
-
         return (status, return_val)
     
     def __call_func(self, call_node):
@@ -124,11 +139,19 @@ class Interpreter(InterpreterBase):
         # first evaluate all of the actual parameters and associate them with the formal parameter names
         args = {}
         for formal_ast, actual_ast in zip(formal_args, actual_args):
-            print(formal_ast)
-            print(actual_ast)
-            result = copy.copy(self.__eval_expr(actual_ast))
+            result = self.__eval_expr(actual_ast)
+            if(result.type() in [InterpreterBase.BOOL_NODE,InterpreterBase.INT_NODE, InterpreterBase.STRING_NODE]):
+                result = copy.copy(self.__eval_expr(actual_ast)) # Pass by value
+            if(formal_ast.get("var_type") == InterpreterBase.BOOL_NODE and result.type() == InterpreterBase.INT_NODE):
+                result = self.__coerce(result)
+            if(formal_ast.get("var_type") in self.struct_table and result.type() == InterpreterBase.NIL_NODE):
+                result = Value(formal_ast.get("var_type"),InterpreterBase.NIL_NODE)
             if(formal_ast.get("var_type") != result.type()):
+                super().error(
+                    ErrorType.TYPE_ERROR, "Argument Type Mismatch"
+                )
                 pass # Throw error type mismatch for parameters
+            
             arg_name = formal_ast.get("name")
             args[arg_name] = result
 
@@ -138,13 +161,33 @@ class Interpreter(InterpreterBase):
         for arg_name, value in args.items():
           self.env.create(arg_name, value,value.type())
         return_status, return_val = self.__run_statements(func_ast.get("statements"))
-        # TODO: Implement void logic (just check whether if return_val is literally anything)
-        if(return_status == ExecStatus.CONTINUE):
+        if(func_ast.get("return_type") is None): # Main function only, do nothing
+            pass
+        elif(func_ast.get("return_type") == InterpreterBase.VOID_DEF):
+            if(return_status == ExecStatus.RETURN):
+                super().error(
+                    ErrorType.TYPE_ERROR, "Invalid return for void function"
+                )
+            if(return_status == ExecStatus.ALONE):
+                return_val = None
+                pass
+        elif(return_status == ExecStatus.CONTINUE or return_status == ExecStatus.ALONE):
             # Return default values
-            print(func_ast)
             return_val = self.__get_default(func_ast.get("return_type"))
-            print(return_val)
-        print(return_val)
+        else: # Means it returned something
+            if(return_val.type() == InterpreterBase.INT_NODE and func_ast.get("return_type") == InterpreterBase.BOOL_NODE):
+                return_val = self.__coerce(copy.copy(return_val))
+            elif(return_val.type() == InterpreterBase.NIL_NODE and func_ast.get("return_type") in self.struct_table):
+                return_val = Value(func_ast.get("return_type"),InterpreterBase.NIL_DEF)
+            elif(func_ast.get("return_type") in self.struct_table):
+                pass # If returning a struct, return the object reference so we do nothing basically
+            elif(return_val.type() != func_ast.get("return_type")):
+                super().error(
+                    ErrorType.TYPE_ERROR, "Invalid return type"
+                )
+                pass # Throw error
+            else:
+                return_val = copy.copy(return_val) # return by value
         self.env.pop_func()
         return return_val
 
@@ -152,10 +195,24 @@ class Interpreter(InterpreterBase):
         output = ""
         for arg in args:
             result = self.__eval_expr(arg)  # result is a Value object
-            print(result)
-            output = output + get_printable(result)
+            if(result is None):
+                super().error(
+                    ErrorType.TYPE_ERROR, "Cannot print out a void function"
+                )
+            if(result.type() in self.struct_table):
+                if(result.value() == InterpreterBase.NIL_DEF):
+                    newWord = "nil"
+                else:
+                    output = "None" # This happens in barista so I will follow this
+                    break
+            else:
+                newWord = get_printable(result)
+            if(newWord == None):
+                super().error(
+                    ErrorType.TYPE_ERROR, "Cannot print out a void function"
+                )
+            output = output + newWord
         super().output(output)
-        return Interpreter.NIL_VALUE
 
     def __call_input(self, name, args):
         if args is not None and len(args) == 1:
@@ -171,18 +228,80 @@ class Interpreter(InterpreterBase):
         if name == "inputs":
             return Value(Type.STRING, inp)
 
+    def __coerce(self, val):
+        if(val.value() == 0):
+            return Value(InterpreterBase.BOOL_NODE, False)
+        return Value(InterpreterBase.BOOL_NODE,True)
+
     def __assign(self, assign_ast):
         var_name = assign_ast.get("name")
         value_obj = self.__eval_expr(assign_ast.get("expression"))
         value_type = value_obj.type()
         if("." in var_name): # If dot operator is used
-            object_name, field_name = var_name.split('.')
-            struct_type = self.env.get(object_name).type()
-            val = self.env.get(object_name).value()
+            x = var_name.split('.')
+            base_object = x[0]
+            
+            topObject = self.env.get(base_object) # We will pass this into the set 
+            if(topObject is None): # Means struct is undefined
+                super().error(
+                    ErrorType.NAME_ERROR, f"Value was not found"
+                )
+            currentStruct = self.env.get(base_object)
+            if(currentStruct.value() == InterpreterBase.NIL_NODE):
+                super().error(
+                    ErrorType.FAULT_ERROR, f"NIL REFERENCE USED"
+                )
+            if(currentStruct.type() not in self.struct_table):
+                super().error(
+                    ErrorType.TYPE_ERROR, f"USED DOT OPERATOR ON NON STRUCT OBJECT"
+                )
+            for i in range(1,len(x)-1):
+                field_name = x[i]
+                if(currentStruct.value() == InterpreterBase.NIL_NODE):
+                    super().error(
+                        ErrorType.FAULT_ERROR, f"NIL REFERENCE USED"
+                    )   
+                if(currentStruct.type() not in self.struct_table):
+                    super().error(
+                        ErrorType.TYPE_ERROR, f"USED DOT OPERATOR ON NON STRUCT OBJECT"
+                    )
+                if(field_name not in currentStruct.value()):
+                    super().error(
+                        ErrorType.NAME_ERROR, f"INVALID FIELD"
+                    )
+                currentStruct = currentStruct.value()[field_name]
+            field_name = x[-1]
+            struct_type = topObject.type()
+            val = currentStruct.value()
+            
+            if(currentStruct.type() not in self.struct_table):
+                super().error(
+                    ErrorType.TYPE_ERROR, f"USED DOT OPERATOR ON NON STRUCT OBJECT"
+                )
+            if(field_name not in val):
+                super().error(
+                    ErrorType.NAME_ERROR, f"INVALID FIELD"
+                )
+            if(value_obj.type() == InterpreterBase.INT_NODE and val[field_name].type() == InterpreterBase.BOOL_NODE):
+                value_obj = self.__coerce(value_obj)
+            if(value_obj.type() == InterpreterBase.NIL_NODE):
+                value_obj = Value(val[field_name].type(),InterpreterBase.NIL_DEF)
+            if(value_obj.type() != val[field_name].type()):
+                super().error(
+                    ErrorType.TYPE_ERROR, f"NON MATCHING TYPES"
+                )
             val[field_name] = value_obj
-            value_obj = Value(struct_type,val)
-            value_type = value_obj.type()
-            var_name = object_name
+            value_obj = topObject
+            value_type = topObject.type()
+            var_name = base_object
+        current_val = self.env.get(var_name)
+        if(current_val.type() == InterpreterBase.BOOL_NODE and value_type == InterpreterBase.INT_NODE):
+            value_obj = self.__coerce(value_obj)
+            value_type = InterpreterBase.BOOL_NODE
+        if(current_val.type() in self.struct_table and value_type == InterpreterBase.NIL_NODE): # We are allowed to set a struct to nil
+            value_obj = Value(current_val.type(), InterpreterBase.NIL_DEF)
+            value_type = current_val.type()
+            
         set_status = self.env.set(var_name, value_obj,value_type)
         if(set_status == "FAIL"):
             super().error(
@@ -205,6 +324,9 @@ class Interpreter(InterpreterBase):
                 if(other in self.struct_table):
                     return Value(var_type,InterpreterBase.NIL_DEF)
                 else:
+                    super().error(
+                        ErrorType.TYPE_ERROR, "Unknown type used"
+                    )
                     pass # Throw error as type does not exist
 
     def __var_def(self, var_ast):
@@ -228,12 +350,29 @@ class Interpreter(InterpreterBase):
         if expr_ast.elem_type == InterpreterBase.VAR_NODE:
             var_name = expr_ast.get("name")
             if("." in var_name): # If dot operator is used so structs
-                object_name, field_name = var_name.split('.')
-                val = self.env.get(object_name).value()[field_name]
+                splitted = var_name.split('.')
+                start = splitted[0]
+                val = self.env.get(start)
+                for i in range(1,len(splitted)):
+                    field = splitted[i]
+                    if(val.value() == InterpreterBase.NIL_NODE):
+                        super().error(
+                            ErrorType.FAULT_ERROR, f"NIL REFERENCE USED"
+                        )
+                    if(val.type() not in self.struct_table):
+                        super().error(
+                            ErrorType.TYPE_ERROR, f"USED DOT OPERATOR ON NON STRUCT OBJECT"
+                        )
+                    if(field not in val.value()):
+                        super().error(
+                            ErrorType.NAME_ERROR, f"INVALID FIELD"
+                        )
+                    val = val.value()[field]
+
             else:
                 val = self.env.get(var_name)
-            if val is None:
-                super().error(ErrorType.NAME_ERROR, f"Variable {var_name} not found")
+                if val is None:
+                    super().error(ErrorType.NAME_ERROR, f"Variable {var_name} not found")
             return val
         if expr_ast.elem_type == InterpreterBase.NEW_NODE:
             found_struct = self.struct_table[expr_ast.get("var_type")]
@@ -253,6 +392,28 @@ class Interpreter(InterpreterBase):
     def __eval_op(self, arith_ast):
         left_value_obj = self.__eval_expr(arith_ast.get("op1"))
         right_value_obj = self.__eval_expr(arith_ast.get("op2"))
+        if(left_value_obj is None or right_value_obj is None):
+            super().error(
+                    ErrorType.TYPE_ERROR,
+                    "Incompatible type for for condition",
+                )
+        if(arith_ast.elem_type in ["||", "&&"]):
+            if(left_value_obj.type() == InterpreterBase.INT_NODE):
+                left_value_obj = self.__coerce(left_value_obj)
+            if(right_value_obj.type() == InterpreterBase.INT_NODE):
+                right_value_obj = self.__coerce(right_value_obj)
+        if(left_value_obj.type() == InterpreterBase.NIL_DEF): # I do not know why eval_expr for Nil returns just "Nil" and not a value. but I will keep it that way since I will not question Carey
+            left_value_obj = Value(InterpreterBase.NIL_NODE,InterpreterBase.NIL_DEF)
+        if(right_value_obj.type() == InterpreterBase.NIL_DEF):
+            right_value_obj = Value(InterpreterBase.NIL_DEF,InterpreterBase.NIL_DEF)
+        if(arith_ast.elem_type in ["&&","||","==","!="]):
+            if((left_value_obj.type() == Type.INT and right_value_obj.type() == Type.BOOL) or
+            (left_value_obj.type() == Type.BOOL and right_value_obj.type() == Type.INT)): # Coercian
+                if(left_value_obj.type() == Type.INT):
+                    left_value_obj = self.__coerce(left_value_obj)
+                else:
+                    right_value_obj = self.__coerce(right_value_obj)
+
         if not self.__compatible_types(
             arith_ast.elem_type, left_value_obj, right_value_obj
         ):
@@ -267,10 +428,31 @@ class Interpreter(InterpreterBase):
             )
         f = self.op_to_lambda[left_value_obj.type()][arith_ast.elem_type]
         return f(left_value_obj, right_value_obj)
-
+    def _dot_operator(self, statement):
+        var_name = statement.get("name")
+        object_name, field_name = var_name.split('.')
+        x = var_name.split('.')
+        struct_type = self.env.get(object_name).type()
+        currentStruct = self.env.get(object_name)
+        val = currentStruct.value()
+        if(currentStruct.value() == InterpreterBase.NIL_NODE):
+            super().error(
+                ErrorType.TYPE_ERROR,
+                "Incompatible type for if condition",
+            )
+        if(currentStruct.type() not in self.struct_table):
+            super().error(
+                ErrorType.TYPE_ERROR, f"USED DOT OPERATOR ON NON STRUCT OBJECT"
+            )
+        if(field_name not in val):
+            super().error(
+                ErrorType.NAME_ERROR, f"INVALID FIELD"
+            )
+        val = val[field_name]
+        return val
     def __compatible_types(self, oper, obj1, obj2):
-        # DOCUMENT: allow comparisons ==/!= of anything against anything
-        if oper in ["==", "!="]:
+        if((obj1.type() == InterpreterBase.NIL_NODE and obj2.type() in self.struct_table) or
+           (obj1.type() in self.struct_table and obj2.type() == InterpreterBase.NIL_NODE)):
             return True
         return obj1.type() == obj2.type()
 
@@ -346,16 +528,19 @@ class Interpreter(InterpreterBase):
         #  set up operations on nil
         self.op_to_lambda[Type.NIL] = {}
         self.op_to_lambda[Type.NIL]["=="] = lambda x, y: Value(
-            Type.BOOL, x.type() == y.type() and x.value() == y.value()
+            Type.BOOL, (x.type() == y.type() or y.type() in self.struct_table) and x.value() == y.value()
         )
         self.op_to_lambda[Type.NIL]["!="] = lambda x, y: Value(
-            Type.BOOL, x.type() != y.type() or x.value() != y.value()
+            Type.BOOL, (x.type() != y.type() and y.type() not in self.struct_table) or x.value() != y.value()
         )
 
     def __do_if(self, if_ast):
         cond_ast = if_ast.get("condition")
         result = self.__eval_expr(cond_ast)
-        if result.type() != Type.BOOL:
+
+        if(result.type() == Type.INT):
+            result = self.__coerce(result)
+        elif result.type() != Type.BOOL:
             super().error(
                 ErrorType.TYPE_ERROR,
                 "Incompatible type for if condition",
@@ -381,6 +566,8 @@ class Interpreter(InterpreterBase):
         run_for = Interpreter.TRUE_VALUE
         while run_for.value():
             run_for = self.__eval_expr(cond_ast)  # check for-loop condition
+            if(run_for.type() == Type.INT):
+                run_for = self.__coerce(run_for)
             if run_for.type() != Type.BOOL:
                 super().error(
                     ErrorType.TYPE_ERROR,
@@ -397,26 +584,9 @@ class Interpreter(InterpreterBase):
 
     def __do_return(self, return_ast):
         expr_ast = return_ast.get("expression")
-        if expr_ast is None:
-            return (ExecStatus.RETURN, Interpreter.NIL_VALUE)
-        value_obj = copy.copy(self.__eval_expr(expr_ast))
+        if expr_ast is None: # Means they called return by itself (return;)
+            return (ExecStatus.ALONE, Interpreter.NIL_VALUE)
+        value_obj = self.__eval_expr(expr_ast)
         return (ExecStatus.RETURN, value_obj)
 
-if (__name__ == "__main__"):
-    x = '''
-    struct flea {
-  age: int;
-  infected : bool;
-}
-struct dog {
-  name: string;
-  vaccinated: bool;  
-}
-func foo(a:string) : string {
-  var x:int;
-}
-   func main() {
-        print(nil);
-   }'''
-gc = Interpreter()
-gc.run(x)
+

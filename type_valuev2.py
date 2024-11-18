@@ -20,6 +20,8 @@ class Value:
 
     def type(self):
         return self.t
+    def __str__(self):
+        return f"Type: {self.t} Value: {self.v}"
 
 
 def create_value(val):
@@ -38,6 +40,8 @@ def create_value(val):
 
 
 def get_printable(val):
+    if(val is None):
+        return None
     if val.type() == Type.INT:
         return str(val.value())
     if val.type() == Type.STRING:

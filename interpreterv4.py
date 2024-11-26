@@ -12,8 +12,18 @@ from type_valuev2 import Type, Value, create_value, get_printable
 class ExecStatus(Enum):
     CONTINUE = 1
     RETURN = 2
+    EXCEPTION = 3
 
 
+class Expression: # Needed for lazy evaluation
+    def __init__(self,expression):
+        self.cached = False
+        self.value = expression
+    def set_value(self,value):
+        self.value = value
+        self.cached = True
+    def __str__(self):
+        return f"Is Cached: {self.cached} Value: {self.value}"
 # Main interpreter class
 class Interpreter(InterpreterBase):
     # constants
@@ -59,10 +69,11 @@ class Interpreter(InterpreterBase):
     def __run_statements(self, statements):
         self.env.push_block()
         for statement in statements:
+            print(statement)
             if self.trace_output:
                 print(statement)
             status, return_val = self.__run_statement(statement)
-            if status == ExecStatus.RETURN:
+            if status == ExecStatus.RETURN or status == ExecStatus.EXCEPTION:
                 self.env.pop_block()
                 return (status, return_val)
 
@@ -73,7 +84,12 @@ class Interpreter(InterpreterBase):
         status = ExecStatus.CONTINUE
         return_val = None
         if statement.elem_type == InterpreterBase.FCALL_NODE:
-            self.__call_func(statement)
+            return_val = self.__call_func(statement)
+            if(return_val.type() == "EXCEPTION"):
+                status = ExecStatus.EXCEPTION
+                return_val = Value(InterpreterBase.STRING_NODE,return_val.value())
+            else:
+                return_val = None # Basically just check whether or not a standalone function call resulted in an exception, if not just reset things to normal
         elif statement.elem_type == "=":
             self.__assign(statement)
         elif statement.elem_type == InterpreterBase.VAR_DEF_NODE:
@@ -84,9 +100,13 @@ class Interpreter(InterpreterBase):
             status, return_val = self.__do_if(statement)
         elif statement.elem_type == Interpreter.FOR_NODE:
             status, return_val = self.__do_for(statement)
+        elif statement.elem_type == InterpreterBase.TRY_NODE:
+            status, return_val = self.__do_try(statement)
+        elif statement.elem_type == InterpreterBase.RAISE_NODE:
+            status, return_val = self.__do_raise(statement)
 
         return (status, return_val)
-    
+
     def __call_func(self, call_node):
         func_name = call_node.get("name")
         actual_args = call_node.get("args")
@@ -109,7 +129,8 @@ class Interpreter(InterpreterBase):
         # first evaluate all of the actual parameters and associate them with the formal parameter names
         args = {}
         for formal_ast, actual_ast in zip(formal_args, actual_args):
-            result = copy.copy(self.__eval_expr(actual_ast))
+            result = self.__lazy_setup(actual_ast) # Must be done lazily
+            result = Expression(result)
             arg_name = formal_ast.get("name")
             args[arg_name] = result
 
@@ -118,7 +139,16 @@ class Interpreter(InterpreterBase):
         # and add the formal arguments to the activation record
         for arg_name, value in args.items():
           self.env.create(arg_name, value)
-        _, return_val = self.__run_statements(func_ast.get("statements"))
+        status, return_val = self.__run_statements(func_ast.get("statements"))
+        if(status == ExecStatus.EXCEPTION and func_name == "main"):
+            # Means we have an uncaught exception
+            super().error(
+                ErrorType.FAULT_ERROR,
+                f"Function {func_ast.get('name')} with {len(actual_args)} args not found",
+            )
+        elif(status == ExecStatus.EXCEPTION):
+            # Return a special value indicating the exception we have
+            return_val = Value("EXCEPTION",return_val.value())
         self.env.pop_func()
         return return_val
 
@@ -148,12 +178,9 @@ class Interpreter(InterpreterBase):
         var_name = assign_ast.get("name")
         #value_obj = self.__eval_expr(assign_ast.get("expression"))
         value_obj = assign_ast.get("expression")
-        print("Before")
-        print(value_obj)
-        value_obj = self.__get_equivalent(value_obj)
+        value_obj = self.__lazy_setup(value_obj)
+        value_obj = Expression(value_obj)
         # Recursively replace each variable with its corresponding expression (lazy eval as we are just replacing the variable name with the expression its pointing to)
-        print(value_obj)
-        print()
         if not self.env.set(var_name, value_obj):
             super().error(
                 ErrorType.NAME_ERROR, f"Undefined variable {var_name} in assignment"
@@ -168,14 +195,37 @@ class Interpreter(InterpreterBase):
             if(value is None): # Means that the variable is pointing at nothing (Either undefined or not initialized)
                 expression.elem_type = "none"
                 expression.dict["val"] = None
+            elif(type(value) == Value): # This means we already have a cached value for our function
+                #TODO LAZY EVAL FOR FUNCTIONS MEANING THAT IT SHOULD SAVE THE ELEMENT NOT THE VALUE WHEN IT IS PASSED IN
+                expression.elem_type = value.type()
+                expression.dict = {"val":value.value()}
             else:
                 value = self.__get_equivalent(value)
-            expression = value
+                expression = value
         elif(expression.elem_type == "fcall"):
             arguments = expression.get("args")
             for i in range(len(arguments)):
                 arguments[i] = self.__get_equivalent(arguments[i])
             expression.dict["args"] = arguments
+        return expression
+
+    def __lazy_setup(self,expression):
+        if(expression.elem_type in Interpreter.BIN_OPS):
+            for i in expression.dict:
+                expression.dict[i] = self.__lazy_setup(expression.get(i))
+        elif(expression.elem_type == "var"): # If its a variable, it already has a corresponding expression object
+            var_name = expression.get("name")
+            value = self.env.get(var_name)
+            # Implement error checking here if var_name doesn't exist remember its lazy so error only happens when it actuall gets run, idea make error expression obj
+            expression = value
+            return expression
+        elif(expression.elem_type == "fcall"): # Worry about this later
+            arguments = expression.get("args")
+            for i in range(len(arguments)):
+                lazy_result = self.__lazy_setup(arguments[i])
+                arguments[i] = self.__lazy_setup(arguments[i])
+            expression.dict["args"] = arguments
+        
         return expression
 
 
@@ -187,6 +237,12 @@ class Interpreter(InterpreterBase):
             )
 
     def __eval_expr(self, expr_ast):
+        if(type(expr_ast) == Expression):
+            if(expr_ast.cached):
+                return expr_ast.value
+            elif(not expr_ast.cached):
+                expr_ast.set_value(self.__eval_expr(expr_ast.value)) # Add checking for error expression
+                return expr_ast.value
         if expr_ast.elem_type == InterpreterBase.NIL_NODE:
             return Interpreter.NIL_VALUE
         if expr_ast.elem_type == InterpreterBase.INT_NODE:
@@ -197,14 +253,16 @@ class Interpreter(InterpreterBase):
             return Value(Type.BOOL, expr_ast.get("val"))
         if expr_ast.elem_type == InterpreterBase.VAR_NODE:
             var_name = expr_ast.get("name")
-            val = self.env.get(var_name)
+            val = self.env.get(var_name) # This will not get an expression object or None
             if val is None:
                 super().error(ErrorType.NAME_ERROR, f"Variable {var_name} not found")
-            if type(val) == Value:
-                return val
-            else:
-                val = self.__eval_expr(val)
-                self.env.set(var_name,val) #cache results
+            if(val.cached): # If value is cached already that means val.value is already a Value object
+                val = val.value
+            elif(not val.cached):
+                val.set_value(self.__eval_expr(val.value))
+                val = val.value
+            else: # Strictly for internal interpreter error checking only
+                exit(20)
             return val
         if expr_ast.elem_type == InterpreterBase.FCALL_NODE:
             return self.__call_func(expr_ast)
@@ -214,6 +272,9 @@ class Interpreter(InterpreterBase):
             return self.__eval_unary(expr_ast, Type.INT, lambda x: -1 * x)
         if expr_ast.elem_type == Interpreter.NOT_NODE:
             return self.__eval_unary(expr_ast, Type.BOOL, lambda x: not x)
+        if expr_ast.elem_type == "none":
+            # This means in lazy evaluation, we tried to use a variable that was pointing to none
+            return Value("None",None)
 
     def __eval_op(self, arith_ast):
         left_value_obj = self.__eval_expr(arith_ast.get("op1"))
@@ -336,7 +397,32 @@ class Interpreter(InterpreterBase):
                 return (status, return_val)
 
         return (ExecStatus.CONTINUE, Interpreter.NIL_VALUE)
+    
+    def __do_try(self, try_ast):
+        statements = try_ast.get("statements")
+        status, return_val = self.__run_statements(statements)
+        if(status == ExecStatus.EXCEPTION): # Exception was raised
+            exception = return_val.value()
+            catchers = try_ast.get("catchers")
+            for catcher in catchers:
+                catch_exception = catcher.get("exception_type")
+                if(catch_exception == exception):
+                    catch_expressions = catcher.get("statements")
+                    status, return_val = self.__run_statements(catch_expressions)
+                    return (status, return_val)
+        return (status, return_val)
 
+    def __do_raise(self,raise_ast):
+        statement = raise_ast.get("exception_type")
+        statement = Expression(self.__lazy_setup(statement))
+        exception_value = self.__eval_expr(statement)
+        if(exception_value.type() != InterpreterBase.STRING_NODE): # Exception generated must be a string
+            super().error(
+                ErrorType.TYPE_ERROR,
+                "Exception is not a string",
+            )
+
+        return (ExecStatus.EXCEPTION, exception_value)
     def __do_for(self, for_ast):
         init_ast = for_ast.get("init") 
         cond_ast = for_ast.get("condition")
@@ -370,17 +456,17 @@ class Interpreter(InterpreterBase):
 
 if (__name__ == "__main__"):
     x = '''
-func faultyFunction() {
-  print(undefinedVar); /* Name error occurs here when evaluated */
-}
-
-func main() {
-    var x;
-    var y;
-    x = 5;
-    y = x + 5 + x + 5;
-    x = print(y+10);
-}
-'''
+   func main() {
+    
+       try {
+    raise "z";
+  }
+  catch "z" {
+    print("z");
+  }
+  catch "y"{
+    print("wa");
+  }
+   }'''
 gc = Interpreter()
 gc.run(x)

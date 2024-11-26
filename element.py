@@ -1,5 +1,4 @@
 class Element:
-    # From now on there will now be an additional element: "None type" for lazy eval when a variable is pointing at nothing (since it doens't exist)
     def __init__(self, elem_type, **kwargs):
         self.elem_type = elem_type
         self.dict = {}

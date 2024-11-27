@@ -278,6 +278,12 @@ class Interpreter(InterpreterBase):
 
     def __eval_op(self, arith_ast):
         left_value_obj = self.__eval_expr(arith_ast.get("op1"))
+        if(left_value_obj.type() == InterpreterBase.BOOL_NODE and left_value_obj.value() == False):
+            if(arith_ast.elem_type == "&&"):
+                return Value(InterpreterBase.BOOL_NODE,False)
+        if(left_value_obj.type() == InterpreterBase.BOOL_NODE and left_value_obj.value() == True):
+            if(arith_ast.elem_type == "||"):
+                return Value(InterpreterBase.BOOL_NODE,True)
         right_value_obj = self.__eval_expr(arith_ast.get("op2"))
         if not self.__compatible_types(
             arith_ast.elem_type, left_value_obj, right_value_obj
@@ -454,19 +460,3 @@ class Interpreter(InterpreterBase):
         return (ExecStatus.RETURN, value_obj)
     
 
-if (__name__ == "__main__"):
-    x = '''
-   func main() {
-    
-       try {
-    raise "z";
-  }
-  catch "z" {
-    print("z");
-  }
-  catch "y"{
-    print("wa");
-  }
-   }'''
-gc = Interpreter()
-gc.run(x)

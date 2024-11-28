@@ -54,6 +54,7 @@ class Interpreter(InterpreterBase):
             if func_name not in self.func_name_to_ast:
                 self.func_name_to_ast[func_name] = {}
             self.func_name_to_ast[func_name][num_params] = func_def
+        print(self.func_name_to_ast)
 
     def __get_func_by_name(self, name, num_params):
         if name not in self.func_name_to_ast:
@@ -69,7 +70,6 @@ class Interpreter(InterpreterBase):
     def __run_statements(self, statements):
         self.env.push_block()
         for statement in statements:
-            print(statement)
             if self.trace_output:
                 print(statement)
             status, return_val = self.__run_statement(statement)
@@ -114,7 +114,8 @@ class Interpreter(InterpreterBase):
 
     def __call_func_aux(self, func_name, actual_args):
         if func_name == "print":
-            return self.__call_print(actual_args)
+            return_value =  self.__call_print(actual_args)
+            return return_value
         if func_name == "inputi" or func_name == "inputs":
             return self.__call_input(func_name, actual_args)
 
@@ -144,7 +145,7 @@ class Interpreter(InterpreterBase):
             # Means we have an uncaught exception
             super().error(
                 ErrorType.FAULT_ERROR,
-                f"Function {func_ast.get('name')} with {len(actual_args)} args not found",
+                f"Uncaught exception",
             )
         elif(status == ExecStatus.EXCEPTION):
             # Return a special value indicating the exception we have
@@ -155,7 +156,11 @@ class Interpreter(InterpreterBase):
     def __call_print(self, args):
         output = ""
         for arg in args:
-            result = self.__eval_expr(arg)  # result is a Value object
+            result = self.__eval_expr(arg)  # result is a Value object and eagerly evaluated
+            while(type(result) == Expression): # If we hit a return value in our arguments
+                result = self.__eval_expr(result)
+            if(result.type() == "EXCEPTION"):
+                return result
             output = output + get_printable(result)
         super().output(output)
         return Interpreter.NIL_VALUE
@@ -163,6 +168,8 @@ class Interpreter(InterpreterBase):
     def __call_input(self, name, args):
         if args is not None and len(args) == 1:
             result = self.__eval_expr(args[0])
+            while(type(result) == Expression):
+                result = self.__eval_expr(result)
             super().output(get_printable(result))
         elif args is not None and len(args) > 1:
             super().error(
@@ -210,6 +217,8 @@ class Interpreter(InterpreterBase):
         return expression
 
     def __lazy_setup(self,expression):
+        if(type(expression) == Expression):
+            return expression
         if(expression.elem_type in Interpreter.BIN_OPS):
             for i in expression.dict:
                 expression.dict[i] = self.__lazy_setup(expression.get(i))
@@ -241,7 +250,10 @@ class Interpreter(InterpreterBase):
             if(expr_ast.cached):
                 return expr_ast.value
             elif(not expr_ast.cached):
-                expr_ast.set_value(self.__eval_expr(expr_ast.value)) # Add checking for error expression
+                evaluation = self.__eval_expr(expr_ast.value)
+                while(type(evaluation) == Expression):
+                    evaluation = self.__eval_expr(evaluation)
+                expr_ast.set_value(evaluation) # Add checking for error expression
                 return expr_ast.value
         if expr_ast.elem_type == InterpreterBase.NIL_NODE:
             return Interpreter.NIL_VALUE
@@ -259,7 +271,10 @@ class Interpreter(InterpreterBase):
             if(val.cached): # If value is cached already that means val.value is already a Value object
                 val = val.value
             elif(not val.cached):
-                val.set_value(self.__eval_expr(val.value))
+                evaluation = self.__eval_expr(val.value)
+                while(type(evaluation) == Expression):
+                    evaluation = self.__eval_expr(evaluation)
+                val.set_value(evaluation)
                 val = val.value
             else: # Strictly for internal interpreter error checking only
                 exit(20)
@@ -278,6 +293,8 @@ class Interpreter(InterpreterBase):
 
     def __eval_op(self, arith_ast):
         left_value_obj = self.__eval_expr(arith_ast.get("op1"))
+        if(type(left_value_obj) == Expression):
+            left_value_obj = self.__eval_expr(left_value_obj)
         if(left_value_obj.type() == InterpreterBase.BOOL_NODE and left_value_obj.value() == False):
             if(arith_ast.elem_type == "&&"):
                 return Value(InterpreterBase.BOOL_NODE,False)
@@ -285,6 +302,8 @@ class Interpreter(InterpreterBase):
             if(arith_ast.elem_type == "||"):
                 return Value(InterpreterBase.BOOL_NODE,True)
         right_value_obj = self.__eval_expr(arith_ast.get("op2"))
+        if(type(right_value_obj) == Expression):
+            right_value_obj = self.__eval_expr(right_value_obj)
         if not self.__compatible_types(
             arith_ast.elem_type, left_value_obj, right_value_obj
         ):
@@ -297,6 +316,8 @@ class Interpreter(InterpreterBase):
                 ErrorType.TYPE_ERROR,
                 f"Incompatible operator {arith_ast.elem_type} for type {left_value_obj.type()}",
             )
+        if(arith_ast.elem_type == "/" and right_value_obj.value() == 0):
+            return Value("EXCEPTION","div0") # Generate division by zero exception
         f = self.op_to_lambda[left_value_obj.type()][arith_ast.elem_type]
         return f(left_value_obj, right_value_obj)
 
@@ -308,6 +329,8 @@ class Interpreter(InterpreterBase):
 
     def __eval_unary(self, arith_ast, t, f):
         value_obj = self.__eval_expr(arith_ast.get("op1"))
+        if(type(value_obj) == Expression):
+            value_obj = self.__eval_expr(value_obj)
         if value_obj.type() != t:
             super().error(
                 ErrorType.TYPE_ERROR,
@@ -386,7 +409,11 @@ class Interpreter(InterpreterBase):
 
     def __do_if(self, if_ast):
         cond_ast = if_ast.get("condition")
-        result = self.__eval_expr(cond_ast)
+        result = self.__eval_expr(cond_ast) # Eager evaluation
+        while(type(result) == Expression):
+            result = self.__eval_expr(result)
+        if(result.type() == "EXCEPTION"):
+            return (ExecStatus.EXCEPTION,Value(InterpreterBase.STRING_NODE,result.value()))
         if result.type() != Type.BOOL:
             super().error(
                 ErrorType.TYPE_ERROR,
@@ -454,9 +481,27 @@ class Interpreter(InterpreterBase):
 
     def __do_return(self, return_ast):
         expr_ast = return_ast.get("expression")
+        expr_ast = self.__lazy_setup(expr_ast)
         if expr_ast is None:
             return (ExecStatus.RETURN, Interpreter.NIL_VALUE)
-        value_obj = copy.copy(self.__eval_expr(expr_ast))
+        value_obj = Expression(expr_ast)
         return (ExecStatus.RETURN, value_obj)
     
+if (__name__ == "__main__"):
+    x = '''
+func increment(n) {
+  print("Incrementing", n);
+  return n + 1;
+}
 
+func main() {
+  var x;
+  var y;
+  x = increment(5);
+  y = increment(x);
+
+  print("Before evaluating y");
+  print("Value of y:", y);   
+}'''
+gc = Interpreter()
+gc.run(x)

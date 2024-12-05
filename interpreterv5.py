@@ -68,16 +68,7 @@ class Interpreter(InterpreterBase):
 
     def __run_statements(self, statements):
         self.env.push_block()
-        print("WEOFJWEOFIJ")
-        for i in statements:
-            print(i)
-        print("wefaoiwejf")
         for statement in statements:
-            print(statement)
-            print("new")
-            for i in statements:
-                print(i)
-            print("end")
             if self.trace_output:
                 print(statement)
             status, return_val = self.__run_statement(statement)
@@ -138,32 +129,22 @@ class Interpreter(InterpreterBase):
         # first evaluate all of the actual parameters and associate them with the formal parameter names
         args = {}
         for formal_ast, actual_ast in zip(formal_args, actual_args):
-
-            if(type(actual_ast) != Expression):
-                result = self.__lazy_setup(actual_ast) # Must be done lazily
-                result = Expression(result)
-            else:
-                result = actual_ast
-            
+            result = self.__lazy_setup(actual_ast) # Must be done lazily
+            result = Expression(result)
             arg_name = formal_ast.get("name")
             args[arg_name] = result
+
         # then create the new activation record 
         self.env.push_func()
         # and add the formal arguments to the activation record
         for arg_name, value in args.items():
           self.env.create(arg_name, value)
-        print("NAME")
-        for i in args:
-            print(i)
-            print(args[i])
-        print(func_name)
         status, return_val = self.__run_statements(func_ast.get("statements"))
         if(status == ExecStatus.EXCEPTION and func_name == "main"):
             # Means we have an uncaught exception
             super().error(
                 ErrorType.FAULT_ERROR,
-                f"Uncaught Exception",
-            )
+                f"Uncaught exception",)
         elif(status == ExecStatus.EXCEPTION):
             # Return a special value indicating the exception we have
             return_val = Value("EXCEPTION",return_val.value())
@@ -234,14 +215,11 @@ class Interpreter(InterpreterBase):
         return expression
 
     def __lazy_setup(self,expression):
+        if(type(expression) == Expression):
+            return expression
         if(expression.elem_type in Interpreter.BIN_OPS):
             for i in expression.dict:
-                if(type(expression.get(i)) == Expression):
-                    continue
-                lazY_evaluation = self.__lazy_setup(expression.get(i))
-                if(type(lazY_evaluation) != Expression):
-                    lazY_evaluation = Expression(lazY_evaluation)
-                expression.dict[i] = lazY_evaluation
+                expression.dict[i] = self.__lazy_setup(expression.get(i))
         elif(expression.elem_type == "var"): # If its a variable, it already has a corresponding expression object
             var_name = expression.get("name")
             value = self.env.get(var_name)
@@ -252,12 +230,8 @@ class Interpreter(InterpreterBase):
             arguments = expression.get("args")
             for i in range(len(arguments)):
                 lazy_result = self.__lazy_setup(arguments[i])
-                if(type(lazy_result) != Expression):
-                    lazy_result = Expression(lazy_result)
-                arguments[i] = lazy_result
+                arguments[i] = self.__lazy_setup(arguments[i])
             expression.dict["args"] = arguments
-        elif(expression.elem_type in ["int","string","bool"]):
-            pass
         
         return expression
 
@@ -274,10 +248,10 @@ class Interpreter(InterpreterBase):
             if(expr_ast.cached):
                 return expr_ast.value
             elif(not expr_ast.cached):
-                evaluation = self.__eval_expr(expr_ast.value)
-                while(type(evaluation) == Expression):
-                    evaluation = self.__eval_expr(evaluation)
-                expr_ast.set_value(evaluation) # Add checking for error expression
+                eval2 = self.__eval_expr(expr_ast.value)
+                while(type(eval2) == Expression):
+                    eval2 = self.__eval_expr(eval2)
+                expr_ast.set_value(eval2) # Add checking for error expression
                 return expr_ast.value
         if expr_ast.elem_type == InterpreterBase.NIL_NODE:
             return Interpreter.NIL_VALUE
@@ -437,7 +411,7 @@ class Interpreter(InterpreterBase):
         while(type(result) == Expression):
             result = self.__eval_expr(result)
         if(result.type() == "EXCEPTION"):
-            return (ExecStatus.EXCEPTION, Value(InterpreterBase.STRING_NODE,result.value()))
+            return (ExecStatus.EXCEPTION,Value(InterpreterBase.STRING_NODE,result.value()))
         if result.type() != Type.BOOL:
             super().error(
                 ErrorType.TYPE_ERROR,
@@ -505,17 +479,18 @@ class Interpreter(InterpreterBase):
 
     def __do_return(self, return_ast):
         expr_ast = return_ast.get("expression")
-        lazy_eval = self.__lazy_setup(expr_ast)
+        expr_ast = self.__lazy_setup(expr_ast)
         if expr_ast is None:
             return (ExecStatus.RETURN, Interpreter.NIL_VALUE)
-        value_obj = Expression(lazy_eval)
+        value_obj = Expression(expr_ast)
         return (ExecStatus.RETURN, value_obj)
+    
 
 if (__name__ == "__main__"):
    x = '''
 func increment(n) {
-    print("Incrementing", n);
-    return n + 1;
+ print("Incrementing", n);
+ return n + 1;
 }
 
 
@@ -524,7 +499,12 @@ func main() {
  var y;
  x = increment(5);
  y = increment(x);
- print(y);
+
+
+ print("Before evaluating y");
+ print("Value of y:", y);  
 }'''
 gc = Interpreter()
 gc.run(x)
+
+

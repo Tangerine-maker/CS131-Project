@@ -20,6 +20,8 @@ class Value:
 
     def type(self):
         return self.t
+    def __str__(self) -> str:
+        return f"Type: {self.t}    Value: {self.v}"
 
 
 def create_value(val):
